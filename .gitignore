@@ -1,0 +1,15 @@
+node_modules/
+*.tsbuildinfo
+coverage/
+.eslintcache
+*.log
+
+/dist/
+/main.js
+/main.css
+/styles.css
+*.map
+/data.json
+/types/
+/*renderers.mjs
+/*renderers.css
