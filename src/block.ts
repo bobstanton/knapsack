@@ -1,29 +1,21 @@
-import { AbstractInputSuggest, MarkdownRenderChild, MarkdownRenderer, Notice, Setting, getAllTags, normalizePath, type App, type TFile } from "obsidian";
-import { parseSettings, type Data, type Field, type Settings } from "./settings";
-import { MARKDOWN_TEMPLATE_PATH, listItems, messageOf, sortedUnique } from "./shared";
-
-interface Result {
-  output: string;
-  errors: string[];
-  warnings: string[];
-  variables: Record<string, unknown>;
-}
-
-interface Supplied {
-  variables: Record<string, unknown>;
-  note?: TFile;
-}
+import { AbstractInputSuggest, MarkdownRenderChild, Notice, Setting, getAllTags, normalizePath, type App } from "obsidian";
+import { findFile, isEmpty, noteIn, noteNameFrom, outputFolder, renderMarkdownPreview, renderMessages, renderTemplate, safeName, suppliedVariables, type Result, type Supplied } from "./notes";
+import { parseSettings, type Field, type Settings } from "./settings";
+import { MARKDOWN_TEMPLATE_PATH, listItems, messageOf, parseJson, sortedUnique } from "./shared";
 
 type TextField = Exclude<Field, { kind: "choice" | "checkbox" }>;
-
-function isSeveral(field: TextField): boolean {
-  return field.kind === "list" || field.kind === "notes";
-}
 
 function readText(field: TextField, text: string): unknown {
   if (field.kind === "number") return text === "" ? undefined : Number(text);
 
-  return isSeveral(field) ? listItems(text).filter(Boolean) : text;
+  if (field.kind === "json") {
+    const parsed = parseJson(text);
+
+    // Text that is not yet JSON stays as typed. null is JSON.
+    return parsed === undefined ? text : parsed;
+  }
+
+  return field.kind === "notes" ? listItems(text).filter(Boolean) : text;
 }
 
 function showValue(value: unknown): string {
@@ -31,10 +23,6 @@ function showValue(value: unknown): string {
   if (Array.isArray(value)) return value.join(", ");
 
   return typeof value === "string" ? value : JSON.stringify(value);
-}
-
-function isEmpty(value: unknown): boolean {
-  return value == null || value === "" || (Array.isArray(value) && value.length === 0);
 }
 
 export class TemplateBlock extends MarkdownRenderChild {
@@ -71,43 +59,18 @@ export class TemplateBlock extends MarkdownRenderChild {
       const actions = Boolean(settings.fields ?? settings.outputFolder);
 
       this.containerEl.toggleClass("knapsack-has-actions", actions);
-      const supplied = settings.fields ? await this.variables(settings.data) : undefined;
+      const supplied = settings.fields ? await suppliedVariables(this.app, this.sourcePath, settings.data) : undefined;
 
       if (settings.fields && supplied) this.renderForm(formEl, settings.fields, supplied.variables);
       if (actions) this.renderActions(formEl);
       await this.refresh(supplied);
     } catch (error) {
-      this.renderMessages("knapsack-error", "⚠️ Template error", [messageOf(error)]);
+      renderMessages(this.previewEl, "knapsack-error", "⚠️ Template error", [messageOf(error)]);
     }
   }
 
   private refresh(supplied?: Supplied): Promise<Result | undefined> {
     return this.pending = this.render(supplied);
-  }
-
-  private file(reference: string): TFile | null {
-    return this.app.metadataCache.getFirstLinkpathDest(reference, this.sourcePath) ?? this.app.vault.getFileByPath(reference);
-  }
-
-  private async variables(data: Data): Promise<Supplied> {
-    const date = new Date().toISOString();
-
-    if (data.from === "note") {
-      const note = this.file(data.reference);
-
-      if (!note) throw new Error(`Data note not found: ${data.reference}`);
-
-      return { variables: { date, ...this.app.metadataCache.getFileCache(note)?.frontmatter }, note };
-    }
-
-    const variables: Record<string, unknown> = { date, ...data.values };
-    const computed = Object.entries(variables).filter((entry): entry is [string, string] => typeof entry[1] === "string" && /\{[{%]/.test(entry[1]));
-
-    if (computed.length === 0) return { variables };
-    const { engine } = await import("./knap");
-    const resolved = await Promise.all(computed.map(async ([name, value]) => [name, await engine.renderOrThrow(value, { variables })] as const));
-
-    return { variables: { ...variables, ...Object.fromEntries(resolved) } };
   }
 
   private renderForm(formEl: HTMLElement, fields: Field[], defaults: Record<string, unknown>): void {
@@ -142,19 +105,56 @@ export class TemplateBlock extends MarkdownRenderChild {
           this.values[field.name] = initial === true;
           setting.addToggle(toggle => toggle.setValue(initial === true).onChange(set));
           break;
+        case "list":
+          this.values[field.name] = this.renderList(setting, field.name, field.property, initial, set);
+          break;
         default: {
-          const shown = showValue(initial);
+          const shown = field.kind === "json" && initial != null && typeof initial !== "string" ? JSON.stringify(initial) : showValue(initial);
 
           this.values[field.name] = readText(field, shown);
           setting.addText(text => {
             text.inputEl.type = field.kind === "number" || field.kind === "date" ? field.kind : "text";
             text.setValue(shown).onChange(value => set(readText(field, value)));
-            if (field.kind === "note" || field.kind === "notes") new ValueSuggest(this.app, text.inputEl, () => noteNames(this.app, field.folder), isSeveral(field));
-            if (field.kind === "text" || field.kind === "list") new ValueSuggest(this.app, text.inputEl, () => propertyValues(this.app, field.property), isSeveral(field));
+            if (field.kind === "note" || field.kind === "notes") new ValueSuggest(this.app, text.inputEl, () => noteNames(this.app, field.folder), field.kind === "notes");
+            if (field.kind === "text") new ValueSuggest(this.app, text.inputEl, () => propertyValues(this.app, field.property), false);
           });
         }
       }
     }
+  }
+
+  private renderList(setting: Setting, name: string, property: string, initial: unknown, set: (items: string[]) => void): string[] {
+    const list = setting.controlEl.createDiv({ cls: "knapsack-list" });
+    const rows = list.createDiv();
+    const add = list.createEl("button", { text: "Add item", attr: { type: "button", "aria-label": `Add item to ${name}` } });
+    const inputs = new Set<HTMLInputElement>();
+    const values = (): string[] => Array.from(inputs, input => input.value.trim()).filter(Boolean);
+    let suggestions: string[] | undefined;
+
+    const addRow = (value: string): HTMLInputElement => {
+      const row = rows.createDiv({ cls: "knapsack-list-item" });
+      const input = row.createEl("input", { type: "text", value, attr: { "aria-label": `${name} item` } });
+      const remove = row.createEl("button", { text: "Remove", attr: { type: "button", "aria-label": `Remove item from ${name}` } });
+      inputs.add(input);
+      input.addEventListener("input", () => set(values()));
+      const suggest = new ValueSuggest(this.app, input, () => suggestions ??= propertyValues(this.app, property), false,
+        () => Array.from(inputs).filter(other => other !== input).map(other => other.value.trim()));
+      remove.addEventListener("click", () => {
+        suggest.close();
+        inputs.delete(input);
+        row.remove();
+        if (inputs.size === 0) addRow("").focus();
+        else add.focus();
+        set(values());
+      });
+      return input;
+    };
+
+    const defaults = Array.isArray(initial) ? initial.map(showValue) : listItems(showValue(initial));
+    for (const item of defaults.filter(item => item.trim())) addRow(item);
+    if (inputs.size === 0) addRow("");
+    add.addEventListener("click", () => addRow("").focus());
+    return values();
   }
 
   private renderActions(formEl: HTMLElement): void {
@@ -185,54 +185,32 @@ export class TemplateBlock extends MarkdownRenderChild {
     }).catch((error: unknown) => new Notice(messageOf(error)));
   }
 
-  private noteName(variables: Record<string, unknown>): string {
-    const named = ["title", "name"]
-      .flatMap(wanted => Object.entries(variables).filter(([name]) => name.toLowerCase() === wanted).map(([, value]) => value))
-      .find((value): value is string => typeof value === "string" && value.trim() !== "");
-    const fallback = this.file(this.settings?.template ?? "")?.basename.replace(/\.knap$/i, "") ?? "Untitled";
-
-    return (named?.trim() ?? fallback).replace(/[\\/:*?"<>|#^[\]]/g, "-");
-  }
-
   private async createNote(result: Result): Promise<void> {
-    const base = this.noteName(result.variables);
-    const wanted = this.settings?.outputFolder ? normalizePath(this.settings.outputFolder) : this.app.fileManager.getNewFileParent(this.sourcePath).path;
-    const existing = this.app.vault.getAllFolders(true).find(folder => folder.path.toLowerCase() === wanted.toLowerCase());
-    const taken = new Set(existing?.children.map(child => child.name.toLowerCase()));
-    let name = `${base}.md`;
+    const settings = this.settings;
 
-    if (!existing) await this.app.vault.createFolder(wanted);
-    for (let copy = 1; taken.has(name.toLowerCase()); copy++) name = `${base} ${copy}.md`;
+    if (!settings) return;
+    const template = findFile(this.app, this.sourcePath, settings.template);
+    const base = noteNameFrom(result.variables) ?? (template ? safeName(template.basename.replace(/\.knap$/i, "")) : "Untitled");
+    const folder = outputFolder(this.app, this.sourcePath, settings);
+    let note = noteIn(folder, base);
 
-    await this.app.workspace.getLeaf("tab").openFile(await this.app.vault.create(normalizePath(`${existing?.path ?? wanted}/${name}`), result.output));
-  }
+    if (!folder.exists) await this.app.vault.createFolder(folder.path);
+    for (let copy = 1; note.exists; copy++) note = noteIn(folder, `${base} ${copy}`);
 
-  private renderMessages(cls: string, title: string, messages: string[]): void {
-    if (messages.length === 0) return;
-    const block = this.previewEl.createDiv({ cls });
-
-    block.createEl("h3", { text: title });
-    for (const message of messages) block.createEl("p", { text: message });
+    await this.app.workspace.getLeaf("tab").openFile(await this.app.vault.create(note.path, result.output));
   }
 
   private async generate(settings: Settings, resolved?: Supplied): Promise<Result> {
-    const template = this.file(settings.template);
+    const template = findFile(this.app, this.sourcePath, settings.template);
 
     if (!template) throw new Error(`Template not found: ${settings.template}`);
     this.watched = [template.path];
-    const supplied = resolved ?? await this.variables(settings.data);
-    const variables = { ...supplied.variables, ...this.values };
-    const { engine, describeError } = await import("./knap");
-    const rendered = await engine.render(await this.app.vault.cachedRead(template), { variables });
+    const supplied = resolved ?? await suppliedVariables(this.app, this.sourcePath, settings.data);
+    const result = await renderTemplate(this.app, template, { ...supplied.variables, ...this.values });
 
     if (supplied.note) this.watched = [template.path, supplied.note.path];
 
-    return {
-      output: rendered.output,
-      errors: rendered.errors.map(describeError),
-      warnings: rendered.warnings.map(warning => `Line ${warning.line}, filter ${warning.filter}: ${warning.message}`),
-      variables,
-    };
+    return result;
   }
 
   private async render(supplied?: Supplied): Promise<Result | undefined> {
@@ -249,29 +227,31 @@ export class TemplateBlock extends MarkdownRenderChild {
 
   private async show(settings: Settings, result: Result): Promise<void> {
     this.previewEl.empty();
-    this.renderMessages("knapsack-error", "⚠️ Template error", result.errors);
-    this.renderMessages("knapsack-error knapsack-warning", "Template warning", result.warnings);
+    renderMessages(this.previewEl, "knapsack-error", "⚠️ Template error", result.errors);
+    renderMessages(this.previewEl, "knapsack-error knapsack-warning", "Template warning", result.warnings);
     if (!result.output.trim() || !settings.preview || (settings.fields && !this.edited)) return;
-    const fence = "`".repeat(Math.max(3, ...(result.output.match(/`+/g) ?? []).map(ticks => ticks.length + 1)));
-
-    await MarkdownRenderer.render(this.app, settings.render ? result.output : `${fence}markdown\n${result.output}\n${fence}`, this.previewEl.createDiv(), this.sourcePath, this);
+    await renderMarkdownPreview(this.app, this.sourcePath, this.previewEl, settings, result.output, this);
   }
 }
 
 class ValueSuggest extends AbstractInputSuggest<string> {
   private options?: string[];
 
-  constructor(app: App, private readonly input: HTMLInputElement, private readonly read: () => string[], private readonly several: boolean) {
+  constructor(app: App, private readonly input: HTMLInputElement, private readonly read: () => string[], private readonly several: boolean, private readonly otherItems?: () => string[]) {
     super(app, input);
   }
 
   protected getSuggestions(query: string): string[] {
     const items = (this.several ? listItems(query) : [query.trim()]).map(item => item.toLowerCase());
     const typed = items.pop() ?? "";
+    const used = new Set([...items, ...(this.otherItems?.() ?? []).map(item => item.toLowerCase())]);
 
     this.options ??= this.read();
 
-    return this.options.filter(option => option.toLowerCase().includes(typed) && option.toLowerCase() !== typed && !items.includes(option.toLowerCase())).slice(0, 50);
+    return this.options.filter(option => {
+      const lower = option.toLowerCase();
+      return lower.includes(typed) && lower !== typed && !used.has(lower);
+    }).slice(0, 50);
   }
 
   renderSuggestion(value: string, el: HTMLElement): void {

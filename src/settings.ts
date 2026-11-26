@@ -6,23 +6,24 @@ interface KindDescription {
 }
 
 export const FIELD_KINDS = {
-  text: { detail: "One line of text", info: "Suggests values of the property with the field's name. A property named after the type is used instead: text Rating." },
+  text: { detail: "One line of text", info: "Suggests the values notes hold in the property of the same name. To use another property, name it after the type: text Rating." },
   number: { detail: "A number" },
-  checkbox: { detail: "true or false" },
+  checkbox: { detail: "A toggle: true or false" },
   date: { detail: "A date, as YYYY-MM-DD" },
-  list: { detail: "Values separated by commas", info: "Reaches the template as a list. Suggests property values as text does: list Trail difficulty." },
-  note: { detail: "The name of a note", info: "Suggests notes. A folder after the type limits them to that folder: note Parks." },
-  notes: { detail: "Note names separated by commas", info: "Reaches the template as a list. A folder after the type limits the notes: notes People." },
+  list: { detail: "Several values", info: "One input per item, with suggestions as for text: list Trail difficulty. From a query: a JSON array, or one item per line of text." },
+  note: { detail: "The name of a note", info: "Suggests notes. To suggest only a folder's notes, name it after the type: note Parks." },
+  notes: { detail: "Note names separated by commas", info: "The template gets them as a list. To suggest only a folder's notes, name it after the type: notes People." },
+  json: { detail: "A table or named values, written as JSON", info: "The template gets the value the JSON describes. From a query: a column such as json_group_array(json_array(name, amount))." },
 } satisfies Record<string, KindDescription>;
 
-export const CHOICE_KIND: KindDescription & { label: string } = { label: "[first, second]", detail: "One of the listed choices", info: "A dropdown. The first choice is selected to begin with." };
+export const CHOICE_KIND: KindDescription & { label: string } = { label: "[first, second]", detail: "One of the listed choices", info: "A dropdown. The first choice starts selected." };
 
 type Kind = keyof typeof FIELD_KINDS;
 
 export type Field = { name: string; required: boolean } & (
   | { kind: "choice"; choices: [string, ...string[]] }
   | { kind: "checkbox" }
-  | { kind: "number" | "date" }
+  | { kind: "number" | "date" | "json" }
   | { kind: "text" | "list"; property: string }
   | { kind: "note" | "notes"; folder: string });
 
@@ -30,14 +31,25 @@ export type Data =
   | { from: "block"; values: Record<string, unknown> }
   | { from: "note"; reference: string };
 
+export const EXISTING_FILE = {
+  skip: "Keeps the existing note (default)",
+  overwrite: "Replaces the existing note's content",
+};
+
+export type ExistingFile = keyof typeof EXISTING_FILE;
+
 export interface Settings {
   template: string;
   data: Data;
+  query?: string;
+  existingFile: ExistingFile;
   fields?: Field[];
   outputFolder?: string;
   preview: boolean;
   render: boolean;
 }
+
+export type QuerySettings = Settings & { query: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -66,7 +78,7 @@ function parseField(label: string, declared: unknown): Field {
   const argument = rest.join(" ");
 
   if (kind === "checkbox") return { ...base, kind };
-  if (kind === "number" || kind === "date") return { ...base, kind };
+  if (kind === "number" || kind === "date" || kind === "json") return { ...base, kind };
   if (kind === "text" || kind === "list") return { ...base, kind, property: argument || name };
   if (kind === "note" || kind === "notes") return { ...base, kind, folder: argument };
 
@@ -89,9 +101,16 @@ export function parseSettings(source: string): Settings {
 
   if (raw.fields != null && !isRecord(raw.fields)) throw new Error("fields lists one input per line, as name: type.");
 
+  const existingFile = raw.existingfile == null ? "skip" : typeof raw.existingfile === "string" ? raw.existingfile.toLowerCase() : "";
+
+  if (raw.query != null && typeof raw.query !== "string") throw new Error("query is one VaultQuery SQL query.");
+  if (existingFile !== "skip" && existingFile !== "overwrite") throw new Error(`existingFile is ${Object.keys(EXISTING_FILE).join(" or ")}.`);
+
   return {
     template: reference(raw.template),
     data: parseData(raw.data),
+    query: raw.query?.trim() || undefined,
+    existingFile,
     fields: isRecord(raw.fields) ? Object.entries(raw.fields).map(([label, declared]) => parseField(label, declared)) : undefined,
     outputFolder: reference(raw.outputfolder) || undefined,
     preview: raw.preview !== false,

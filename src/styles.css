@@ -47,6 +47,11 @@
 .knapsack-editor .cm-completionDetail { color: var(--text-muted); }
 
 .knapsack-actions { border-top: none; }
+.knapsack-list { display: grid; gap: var(--size-4-2); min-width: 0; }
+.knapsack-list > button { justify-self: start; }
+.knapsack-list-item { display: flex; gap: var(--size-4-2); }
+.knapsack-list-item + .knapsack-list-item { margin-top: var(--size-4-2); }
+.knapsack-list-item input { flex: 1; min-width: 0; }
 
 body:not(.is-phone) .knapsack-block { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 var(--size-4-4); }
 body:not(.is-phone) .knapsack-form { flex: none; max-width: 100%; }
@@ -71,3 +76,35 @@ body:not(.is-phone) .knapsack-field .setting-item-info { margin-inline-end: var(
 .knapsack-form .knapsack-missing input { border-color: var(--text-error); }
 
 .knapsack-block.knapsack-has-actions .knapsack-form ~ .knapsack-preview button.copy-code-button { display: none; }
+
+body:not(.is-phone) .knapsack-block.knapsack-query { gap: var(--size-4-3) var(--size-4-4); }
+.knapsack-query-rows { display: flex; flex-direction: column; gap: var(--size-4-2); flex: 1 1 15em; min-width: 0; font-size: var(--font-ui-small); }
+.knapsack-query-detail { flex: 3 1 22em; min-width: 0; }
+.is-phone .knapsack-query-rows { margin-bottom: var(--size-4-3); }
+.knapsack-query-filters { display: flex; flex-wrap: wrap; gap: var(--size-2-3); }
+.knapsack-query-filter { height: auto; padding: var(--size-2-1) var(--size-4-3); border-radius: var(--radius-xl); font-size: inherit; }
+.knapsack-query-filter[aria-pressed="true"] { border-color: var(--interactive-accent); background-color: var(--interactive-accent); color: var(--text-on-accent); }
+.knapsack-query-filter[data-status="problem"]:not([aria-pressed="true"]) { color: var(--text-error); }
+.knapsack-query-list { --knapsack-row-height: 2.2em; max-height: calc(var(--knapsack-row-height) * 10.5); overflow-y: auto; border: var(--border-width) solid var(--background-modifier-border); border-radius: var(--radius-m); }
+.knapsack-query-list:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 1px; }
+.knapsack-query-spacer { position: relative; height: calc(var(--knapsack-rows) * var(--knapsack-row-height)); }
+.knapsack-query-row { position: absolute; inset-inline: 0; top: calc(var(--knapsack-row) * var(--knapsack-row-height)); height: var(--knapsack-row-height); box-sizing: border-box; display: flex; align-items: center; gap: var(--size-4-2); padding: 0 var(--size-4-2); border-radius: var(--radius-s); cursor: var(--cursor); }
+.knapsack-query-row:hover { background-color: var(--background-modifier-hover); }
+.knapsack-query-row[aria-selected="true"] { background-color: var(--background-modifier-active-hover); color: var(--text-accent); font-weight: var(--font-semibold); }
+.knapsack-query-row-icon { display: flex; flex: none; color: var(--text-muted); }
+.knapsack-query-row[data-status="ready"] .knapsack-query-row-icon { color: var(--text-success); }
+.knapsack-query-row[data-status="problem"] .knapsack-query-row-icon, .knapsack-query-row[data-status="problem"] .knapsack-query-row-note { color: var(--text-error); }
+.knapsack-query-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.knapsack-query-row[data-status="exists"] .knapsack-query-row-name { color: var(--text-muted); }
+.knapsack-query-row-note { flex: none; color: var(--text-muted); font-weight: var(--font-normal); }
+.knapsack-query-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--size-4-2); }
+.knapsack-query-current { display: flex; align-items: center; gap: var(--size-4-2); margin-bottom: var(--size-4-2); font-size: var(--font-ui-small); }
+.knapsack-query-current:empty { display: none; }
+.knapsack-query-path { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.knapsack-query .knapsack-preview button.copy-code-button { display: none; }
+.knapsack-query button.knapsack-query-link { display: inline; height: auto; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--link-color); font: inherit; line-height: inherit; vertical-align: baseline; text-decoration: underline; cursor: var(--cursor-link); }
+.knapsack-query button.knapsack-query-link:hover { background: none; box-shadow: none; color: var(--link-color-hover); }
+.cm-preview-code-block .knapsack-query-current { padding-inline-end: calc(var(--icon-size) + var(--size-4-6)); }
+.is-phone .knapsack-query-list { --knapsack-row-height: 44px; max-height: calc(var(--knapsack-row-height) * 4.5); }
+.is-phone .knapsack-query-filter { min-height: var(--input-height); }
+.is-phone .knapsack-query-actions button { flex: 1; }

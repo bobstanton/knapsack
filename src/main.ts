@@ -4,9 +4,21 @@ import { registerKnap as registerCodeMirrorMode } from "knap/codemirror";
 import { registerKnap as registerPrismGrammar } from "knap/prism";
 import { TemplateBlock } from "./block";
 import { noteBlocks } from "./note-blocks";
+import { QueryBlock } from "./query-block";
+import { parseSettings, type QuerySettings } from "./settings";
 import { MARKDOWN_TEMPLATE_PATH, TEMPLATE_PATH, TEMPLATE_VIEW } from "./shared";
 import { TemplateView } from "./template-view";
 import "./styles.css";
+
+function queryOf(source: string): QuerySettings | null {
+  try {
+    const settings = parseSettings(source);
+
+    return settings.query ? { ...settings, query: settings.query } : null;
+  } catch {
+    return null;
+  }
+}
 
 export default class KnapsackPlugin extends Plugin {
   onload(): void {
@@ -14,7 +26,11 @@ export default class KnapsackPlugin extends Plugin {
     this.registerExtensions(["knap"], TEMPLATE_VIEW);
     this.routeMarkdownTemplates();
     this.registerEditorExtension(noteBlocks(this.app));
-    this.registerMarkdownCodeBlockProcessor("knapsack", (source, el, ctx) => ctx.addChild(new TemplateBlock(this.app, source, el, ctx.sourcePath)));
+    this.registerMarkdownCodeBlockProcessor("knapsack", (source, el, ctx) => {
+      const query = queryOf(source);
+
+      ctx.addChild(query ? new QueryBlock(this.app, query, el, ctx.sourcePath) : new TemplateBlock(this.app, source, el, ctx.sourcePath));
+    });
 
     void loadPrism().then((prism: { languages: Record<string, unknown> }) => {
       registerPrismGrammar(prism);

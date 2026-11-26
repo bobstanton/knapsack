@@ -15,6 +15,14 @@ export function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort((left, right) => left.localeCompare(right));
 }
 
+export function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
 export function listItems(text: string): string[] {
   return text.split(",").map(item => item.trim());
 }
